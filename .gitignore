@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# modelos baixados (grandes) e binarios compilados
+modelos/
+vendor/
+
+# segredos e config local
+.env
+config.local.yaml
+
+# gravacoes de depuracao
+*.wav
+!tests/fixtures/*.wav

@@ -1,0 +1,58 @@
+# Configuracao do Aristoteles.
+# Tudo aqui tem default no codigo (aristoteles/config.py); este arquivo so sobrescreve.
+
+audio:
+  taxa_amostragem: 16000     # exigido pelo Whisper e pelo webrtcvad
+  bloco_ms: 30               # 10, 20 ou 30 -- webrtcvad so aceita esses
+  pre_roll_s: 1.5            # audio guardado ANTES do gatilho (nao perde o inicio da frase)
+  fila_maxima_s: 30.0        # teto da fila de captura (> vad.duracao_maxima_s); evita crescer sem limite no ocioso
+  dispositivo_entrada: null  # null = padrao do sistema; ou indice/nome (veja: python -m aristoteles --listar-audio)
+  dispositivo_saida: null
+
+vad:
+  agressividade: 2           # 0 = permissivo, 3 = agressivo (corta mais)
+  silencio_final_ms: 700     # silencio que encerra a gravacao
+  fala_minima_ms: 300        # ignora ruidos curtos
+  duracao_maxima_s: 20.0     # trava de seguranca
+  espera_inicial_s: 4.0      # desiste se ninguem falar nesse tempo
+  # Gate de energia. O webrtcvad sozinho toma ruido de ventoinha / ganho alto de
+  # mic USB por fala (medido: 98/100 blocos de ambiente, mesmo na agressividade 3).
+  # O piso e medido na inicializacao, entao se adapta ao seu ambiente.
+  calibracao_ms: 600
+  fator_acima_do_piso: 3.0   # fala precisa estar 3x acima do piso de ruido
+  piso_minimo: 0.01          # limiar absoluto minimo
+
+stt:
+  backend: cpu               # "cpu" (faster-whisper) | "vulkan" (whisper.cpp na Radeon)
+  idioma: pt
+  # --- backend cpu ---
+  modelo_cpu: small          # tiny | base | small | medium | large-v3
+  compute_type: int8         # int8 e o melhor custo/beneficio em CPU
+  threads: 8
+  # --- backend vulkan ---
+  servidor_url: http://127.0.0.1:8178/inference
+
+llm:
+  modelo: claude-opus-5
+  max_tokens: 1024
+  effort: low                # low | medium | high  (latencia x qualidade)
+  pensar: false              # true = thinking adaptativo (necessario se usar ferramentas)
+  turnos_historico: 10       # pares pergunta/resposta mantidos em contexto
+  prompt_sistema: |
+    Voce e Aristoteles, um assistente de voz. Suas respostas serao convertidas
+    em fala por um sintetizador, entao siga estas regras sem excecao:
+    - Responda em portugues do Brasil, em no maximo 3 frases curtas.
+    - Nunca use markdown, listas, asteriscos, emojis ou tabelas.
+    - Nunca inclua tags XML internas ou de sistema na resposta.
+    - Escreva numeros, simbolos e siglas por extenso quando ajudar a pronuncia.
+    - Se nao souber, diga que nao sabe em uma frase. Nao invente.
+
+tts:
+  voz: modelos/piper/pt_BR-faber-medium.onnx
+  velocidade: 1.0            # 1.0 = normal; >1 mais lento (comprimento do fonema)
+
+wake:
+  modo: push_to_talk         # "push_to_talk" (fases 0-4) | "openwakeword" (fase 5)
+  modelo: modelos/wake/aristoteles.onnx
+  limiar: 0.5
+  cooldown_s: 1.5

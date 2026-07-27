@@ -1,0 +1,27 @@
+# Servico de usuario (nao de sistema): precisa da sessao de audio do usuario.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp systemd/aristoteles.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now aristoteles
+#   journalctl --user -u aristoteles -f
+#
+# Requer wake.modo: openwakeword no config.yaml (push-to-talk precisa de terminal).
+
+[Unit]
+Description=Aristoteles - assistente de voz local
+After=pipewire.service sound.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Dropbox/aristoteles_python
+Environment=PYTHONUNBUFFERED=1
+# Prefira um arquivo de ambiente a deixar a chave no unit file:
+EnvironmentFile=%h/.config/aristoteles/env
+ExecStart=%h/Dropbox/aristoteles_python/.venv/bin/python -m aristoteles
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
