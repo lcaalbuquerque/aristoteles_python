@@ -15,11 +15,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Dropbox/aristoteles_python
+WorkingDirectory=%h/aristoteles_python
 Environment=PYTHONUNBUFFERED=1
 # Prefira um arquivo de ambiente a deixar a chave no unit file:
 EnvironmentFile=%h/.config/aristoteles/env
-ExecStart=%h/Dropbox/aristoteles_python/.venv/bin/python -m aristoteles
+ExecStart=%h/aristoteles_python/.venv/bin/python -m aristoteles
 Restart=on-failure
 RestartSec=5
 
