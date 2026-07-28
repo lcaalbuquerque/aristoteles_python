@@ -87,6 +87,161 @@ def test_desiste_se_ninguem_fala():
     assert len(entrada._blocos) > 600
 
 
+def _com_pre_roll(blocos, pre_roll=()):
+    e = EntradaFalsa(blocos)
+    e._pre_roll = list(pre_roll)
+    return e
+
+
+def test_cauda_do_gatilho_nao_arma_o_endpointing():
+    """A regressao relatada: a janela de escuta parecia instantanea.
+
+    A cauda de "Aristoteles" ficava na fila e era contada como fala do usuario,
+    ligando `houve_fala`. Dali em diante valia o silencio_final_ms de 700 ms em vez
+    do espera_inicial_s, e quem pausava para formular a pergunta perdia a vez.
+    """
+    cfg = VadCfg(silencio_final_ms=700, espera_inicial_s=6.0, fala_minima_ms=300,
+                 piso_minimo=0.001, absorver_max_ms=1300)
+    det = DetectorFala(cfg, AudioCfg())
+    det.limiar = 0.001
+
+    # cauda do gatilho (10 blocos = 300 ms), pausa de 1,5 s (50 blocos), pergunta
+    blocos = ([bloco(0.3, seed=i) for i in range(10)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 50
+              + [bloco(0.3, seed=100 + i) for i in range(20)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 30)
+
+    audio = gravar_ate_silencio(EntradaFalsa(blocos), det, cfg,
+                                usar_pre_roll=False, absorver_gatilho=True)
+    assert audio is not None, "desistiu durante a pausa depois do gatilho"
+
+
+def test_sem_absorver_o_gatilho_a_pausa_encerra_cedo():
+    """Documenta o comportamento antigo, para deixar claro o que a flag muda."""
+    cfg = VadCfg(silencio_final_ms=700, espera_inicial_s=6.0, fala_minima_ms=300,
+                 piso_minimo=0.001)
+    det = DetectorFala(cfg, AudioCfg())
+    det.limiar = 0.001
+    blocos = ([bloco(0.3, seed=i) for i in range(10)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 50
+              + [bloco(0.3, seed=100 + i) for i in range(20)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 30)
+
+    entrada = EntradaFalsa(blocos)
+    gravar_ate_silencio(entrada, det, cfg, usar_pre_roll=False,
+                        absorver_gatilho=False)
+    # Parou no silencio depois da cauda, sem chegar na pergunta.
+    assert len(entrada._blocos) > 40
+
+
+def test_tirada_unica_nao_e_engolida_pela_absorcao():
+    """"Aristoteles, que horas sao?" sem pausa: o teto de absorcao protege."""
+    cfg = VadCfg(silencio_final_ms=700, espera_inicial_s=6.0, fala_minima_ms=300,
+                 piso_minimo=0.001, absorver_max_ms=300)  # teto baixo: 10 blocos
+    det = DetectorFala(cfg, AudioCfg())
+    det.limiar = 0.001
+    # 40 blocos de fala contínua (1,2 s), depois silencio
+    blocos = ([bloco(0.3, seed=i) for i in range(40)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 30)
+
+    audio = gravar_ate_silencio(EntradaFalsa(blocos), det, cfg,
+                                usar_pre_roll=False, absorver_gatilho=True)
+    assert audio is not None, "absorveu a pergunta inteira como se fosse o gatilho"
+
+
+def test_estalo_curto_nao_arma_o_endpointing():
+    """A segunda metade da regressao relatada.
+
+    Absorver o gatilho resolveu a cauda da palavra, mas qualquer ruido curto
+    *depois* dela ainda armava o endpointing: medido, um estalo de 90 ms (tosse,
+    cadeira, teclado) derrubava a janela de 6 s para 1,4 s. Por isso `houve_fala`
+    exige `fala_minima_ms` acumulados, nao um bloco isolado.
+    """
+    cfg = VadCfg(silencio_final_ms=700, espera_inicial_s=6.0, fala_minima_ms=300,
+                 piso_minimo=0.001, absorver_max_ms=1300)
+    det = DetectorFala(cfg, AudioCfg())
+    det.limiar = 0.001
+
+    # gatilho, pausa, estalo de 3 blocos (90 ms), e silencio de sobra
+    blocos = ([bloco(0.3, seed=i) for i in range(30)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 30
+              + [bloco(0.3, seed=99 + i) for i in range(3)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 400)
+    entrada = EntradaFalsa(blocos)
+    gravar_ate_silencio(entrada, det, cfg, usar_pre_roll=False,
+                        absorver_gatilho=True)
+    consumidos = len(blocos) - len(entrada._blocos)
+    # 6 s de paciencia = 200 blocos; com o bug parava em ~45
+    assert consumidos > 150, f"desistiu em {consumidos * 0.03:.2f}s por causa de um estalo"
+
+
+def test_estalo_reinicia_a_paciencia():
+    """Fez um som mas nao falou: ganha os 6 s de novo, nao perde a vez."""
+    cfg = VadCfg(espera_inicial_s=0.6, fala_minima_ms=300, piso_minimo=0.001,
+                 absorver_max_ms=30)  # absorve 1 bloco so
+    det = DetectorFala(cfg, AudioCfg())
+    det.limiar = 0.001
+    # 15 blocos de silencio (0,45 s), estalo, e a pergunta comeca depois
+    blocos = ([bloco(0.3, seed=0)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 15
+              + [bloco(0.3, seed=50)]                      # reinicia a paciencia
+              + [np.zeros(AMOSTRAS, np.int16)] * 15
+              + [bloco(0.3, seed=100 + i) for i in range(20)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 30)
+    audio = gravar_ate_silencio(EntradaFalsa(blocos), det, cfg,
+                                usar_pre_roll=False, absorver_gatilho=True)
+    assert audio is not None, "desistiu apesar de o estalo ter reiniciado a espera"
+
+
+def test_fala_longa_arma_o_endpointing():
+    """O contrapeso: fala de verdade precisa encerrar em silencio_final_ms."""
+    cfg = VadCfg(silencio_final_ms=300, espera_inicial_s=6.0, fala_minima_ms=300,
+                 piso_minimo=0.001, absorver_max_ms=30)
+    det = DetectorFala(cfg, AudioCfg())
+    det.limiar = 0.001
+    blocos = ([bloco(0.3, seed=0)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 5
+              + [bloco(0.3, seed=100 + i) for i in range(20)]  # 600 ms: arma
+              + [np.zeros(AMOSTRAS, np.int16)] * 200)
+    entrada = EntradaFalsa(blocos)
+    audio = gravar_ate_silencio(entrada, det, cfg, usar_pre_roll=False,
+                                absorver_gatilho=True)
+    assert audio is not None
+    # encerrou nos 300 ms de silencio, nao esperou os 200 blocos
+    assert len(entrada._blocos) > 150
+
+
+def test_absorcao_ainda_desiste_se_ninguem_fala():
+    """Absorver o gatilho nao pode virar espera infinita."""
+    cfg = VadCfg(silencio_final_ms=700, espera_inicial_s=0.6, fala_minima_ms=300,
+                 piso_minimo=0.001, absorver_max_ms=1300)
+    det = DetectorFala(cfg, AudioCfg())
+    det.limiar = 0.001
+    blocos = ([bloco(0.3, seed=i) for i in range(10)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 300)
+    entrada = EntradaFalsa(blocos)
+    assert gravar_ate_silencio(entrada, det, cfg, usar_pre_roll=False,
+                               absorver_gatilho=True) is None
+    assert len(entrada._blocos) > 250  # desistiu rapido, nao gravou os 20 s
+
+
+def test_audio_absorvido_vai_para_o_whisper():
+    """O gatilho fica no audio: na tirada unica a pergunta comeca junto dele."""
+    cfg = VadCfg(silencio_final_ms=700, espera_inicial_s=6.0, fala_minima_ms=300,
+                 piso_minimo=0.001, absorver_max_ms=1300)
+    det = DetectorFala(cfg, AudioCfg())
+    det.limiar = 0.001
+    blocos = ([bloco(0.3, seed=i) for i in range(10)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 10
+              + [bloco(0.3, seed=100 + i) for i in range(20)]
+              + [np.zeros(AMOSTRAS, np.int16)] * 30)
+    audio = gravar_ate_silencio(EntradaFalsa(blocos), det, cfg,
+                                usar_pre_roll=False, absorver_gatilho=True)
+    assert audio is not None
+    # 10 absorvidos + 10 silencio + 20 fala + 24 de silencio final, tudo presente
+    assert len(audio) > 60 * AMOSTRAS
+
+
 def test_fala_curta_demais_e_descartada():
     cfg = VadCfg(fala_minima_ms=300, piso_minimo=0.001, espera_inicial_s=5.0)
     det = DetectorFala(cfg, AudioCfg())
