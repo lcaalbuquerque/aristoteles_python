@@ -96,6 +96,20 @@ class TtsCfg:
 
 
 @dataclass
+class LogCfg:
+    """Copia para arquivo de tudo que o app imprime no console."""
+    ativo: bool = True
+    arquivo: Path = Path("logs/aristoteles.log")
+    # Rodizio, porque como servico systemd o app fica ligado por dias.
+    max_bytes: int = 5_000_000
+    backups: int = 3
+    # `\r` e usado para reescrever a linha de status ("[ouvindo]" -> "voce: ...").
+    # No arquivo isso viraria uma linha ilegivel, entao cada reescrita e gravada
+    # como sua propria linha. Desligue para ver o fluxo exatamente como saiu.
+    expandir_retorno: bool = True
+
+
+@dataclass
 class WakeCfg:
     modo: str = "push_to_talk"
     modelo: Path = Path("modelos/wake/aristoteles.onnx")
@@ -111,6 +125,7 @@ class Config:
     llm: LlmCfg = field(default_factory=LlmCfg)
     tts: TtsCfg = field(default_factory=TtsCfg)
     wake: WakeCfg = field(default_factory=WakeCfg)
+    log: LogCfg = field(default_factory=LogCfg)
     raiz: Path = RAIZ
 
     @classmethod
@@ -125,7 +140,7 @@ class Config:
         for nome in secoes:
             classe = {
                 "audio": AudioCfg, "vad": VadCfg, "stt": SttCfg,
-                "llm": LlmCfg, "tts": TtsCfg, "wake": WakeCfg,
+                "llm": LlmCfg, "tts": TtsCfg, "wake": WakeCfg, "log": LogCfg,
             }[nome]
             kwargs[nome] = _montar(classe, bruto.get(nome) or {}, nome)
 

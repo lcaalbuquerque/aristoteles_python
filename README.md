@@ -55,6 +55,7 @@ Para voltar ao push-to-talk (Enter em vez da palavra), ponha
 | `aristoteles/tts.py` | Piper (CPU, mais rápido que tempo real) |
 | `aristoteles/wake.py` | push-to-talk e openWakeWord atrás de um `Protocol` |
 | `aristoteles/barge_in.py` | vigia o mic durante a fala; a palavra de ativação interrompe |
+| `aristoteles/registro.py` | copia para arquivo tudo que sai no console |
 | `treino/` | treino da wake word (fase 5). Fora do pacote instalado; só isto usa `torch` |
 
 Cada estágio é uma função pura e testável — dá para trocar o STT sem tocar no resto.
@@ -320,6 +321,45 @@ Quando ele desiste, agora diz por quê: `[nao ouvi nada: ninguem falou em 6s
 (vad.espera_inicial_s)]`. O `DetectorFala.ultimo_motivo` guarda o motivo — depois de
 diagnosticar isto duas vezes, valia o próximo caso ser uma olhada em vez de uma
 investigação.
+
+## Log do console
+
+Tudo que aparece no console vai também para `logs/aristoteles.log`, com carimbo de
+tempo e rodízio automático (5 MB × 3 backups — o app fica dias ligado como serviço).
+
+```bash
+tail -f logs/aristoteles.log            # acompanhar
+python -m aristoteles --sem-log         # desligar nesta execução
+```
+
+É **tee** em `sys.stdout`/`sys.stderr`, não conversão dos `print()` para `logging`.
+Duas razões:
+
+- O app usa `end=""` e `\r` para reescrever a linha de status ao vivo
+  (`[ouvindo]` → `\r voce (0.9s): ...`). O `logging` emite uma linha por chamada,
+  então converter quebraria a interface no terminal. No arquivo cada reescrita
+  vira sua própria linha (`log.expandir_retorno`).
+- O tee pega também o que **não** é nosso: o `[audio]` do callback do PortAudio,
+  avisos do onnxruntime e tracebacks — justamente o que se quer num log de
+  diagnóstico, e o que trocar os prints deixaria de fora.
+
+Duas limitações honestas:
+
+- Bibliotecas que escrevem no descritor 2 em nível C — o PortAudio faz isso em
+  alguns erros de ALSA — passam ao lado, porque a troca é no objeto Python. Elas
+  aparecem no terminal e no `journalctl`, mas não no arquivo.
+- Duas instâncias ao mesmo tempo (serviço + terminal) escrevem no mesmo arquivo e
+  o rodízio não é coordenado entre processos. Use `--sem-log` numa delas, ou
+  aponte `log.arquivo` para outro caminho.
+
+Como serviço, o `journalctl` já captura a saída — o arquivo é redundante ali, mas
+sobrevive ao `vacuum` do journal.
+
+**SIGTERM.** `systemctl stop` manda SIGTERM, cuja ação default encerra o processo
+sem rodar os `finally`: o log ficava sem a linha de encerramento e sem a última
+linha pendente, e o stream de áudio não era fechado. O
+[__main__.py](aristoteles/__main__.py) trata SIGTERM como Ctrl-C, reaproveitando o
+caminho de saída limpa que já existia.
 
 ## Notas de configuração
 

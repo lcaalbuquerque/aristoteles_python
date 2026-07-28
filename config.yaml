@@ -65,6 +65,18 @@ tts:
   voz: modelos/piper/pt_BR-faber-medium.onnx
   velocidade: 1.0            # 1.0 = normal; >1 mais lento (comprimento do fonema)
 
+log:
+  # Copia para arquivo tudo que aparece no console, inclusive tracebacks e o que
+  # as bibliotecas imprimem. Nao substitui o journalctl quando roda como servico;
+  # serve para quando voce roda no terminal.
+  ativo: true
+  arquivo: logs/aristoteles.log   # relativo a raiz do projeto; aceita ~ e absoluto
+  max_bytes: 5000000              # rodizio: como servico o app fica dias ligado
+  backups: 3
+  # O app usa "\r" para reescrever a linha de status ([ouvindo] -> voce: ...).
+  # true grava cada reescrita como sua propria linha; false preserva o fluxo cru.
+  expandir_retorno: true
+
 wake:
   modo: openwakeword         # "push_to_talk" (fases 0-4) | "openwakeword" (fase 5)
   modelo: modelos/wake/aristoteles.onnx

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 import time
 from pathlib import Path
@@ -17,8 +18,24 @@ from .audio.saida import SaidaAudio, beep
 from .barge_in import VigiaBargeIn
 from .cerebro import Cerebro
 from .config import Config
+from .registro import Registro
 from .tts import Voz
 from .vad import DetectorFala, gravar_ate_silencio
+
+
+def _tratar_sigterm() -> None:
+    """Faz o SIGTERM se comportar como Ctrl-C.
+
+    `systemctl stop` manda SIGTERM, cuja acao default encerra o processo sem rodar
+    os `finally`. Sem isto o stream de audio nao era fechado, o resumo de blocos
+    descartados nao saia, e o arquivo de log ficava sem a linha de encerramento e
+    sem a ultima linha pendente. Levantar KeyboardInterrupt reaproveita o caminho
+    de saida limpa que ja existe.
+    """
+    def encerrar(_sig, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, encerrar)
 
 
 def main() -> int:
@@ -26,6 +43,8 @@ def main() -> int:
     ap.add_argument("-c", "--config", type=Path, default=None, help="caminho do config.yaml")
     ap.add_argument("--listar-audio", action="store_true", help="lista dispositivos e sai")
     ap.add_argument("--texto", action="store_true", help="entrada por teclado (pula STT) -- util para depurar")
+    ap.add_argument("--sem-log", action="store_true",
+                    help="nao copia o console para o arquivo de log")
     args = ap.parse_args()
 
     if args.listar_audio:
@@ -33,12 +52,31 @@ def main() -> int:
         return 0
 
     cfg = Config.carregar(args.config)
+    if args.sem_log:
+        cfg.log.ativo = False
 
+    _tratar_sigterm()
+
+    # O tee comeca aqui, o mais cedo possivel: tudo abaixo -- inclusive falhas de
+    # inicializacao e tracebacks -- vai para o arquivo junto com o console.
+    with Registro(cfg.log, cfg.raiz) as registro:
+        try:
+            return _executar(args, cfg, registro)
+        except KeyboardInterrupt:
+            # Rede de seguranca: se o sinal chegar durante a carga dos modelos,
+            # antes do try do loop, ainda saimos sem traceback -- e com o
+            # `__exit__` do Registro rodando, que e o que fecha o log.
+            print("\nEncerrando.")
+            return 130
+
+
+def _executar(args, cfg: Config, registro: Registro) -> int:
     print("Aristoteles iniciando...")
     print(f"  STT.....: {cfg.stt.backend} ({cfg.stt.modelo_cpu if cfg.stt.backend == 'cpu' else cfg.stt.servidor_url})")
     print(f"  LLM.....: {cfg.llm.modelo} (effort={cfg.llm.effort}, thinking={'on' if cfg.llm.pensar else 'off'})")
     print(f"  TTS.....: {Path(cfg.tts.voz).name}")
     print(f"  Gatilho.: {cfg.wake.modo}")
+    print(f"  Log.....: {registro.caminho if cfg.log.ativo else 'desligado'}")
 
     try:
         voz = Voz(cfg.tts, cfg.raiz)

@@ -17,6 +17,9 @@ dados_wake/
 .env
 config.local.yaml
 
+# log do console (rodizio automatico)
+logs/
+
 # gravacoes de depuracao
 *.wav
 !tests/fixtures/*.wav
