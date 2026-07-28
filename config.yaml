@@ -14,7 +14,13 @@ vad:
   silencio_final_ms: 700     # silencio que encerra a gravacao
   fala_minima_ms: 300        # ignora ruidos curtos
   duracao_maxima_s: 20.0     # trava de seguranca
-  espera_inicial_s: 4.0      # desiste se ninguem falar nesse tempo
+  # Tempo para COMECAR a falar depois do gatilho. Se a janela parecer curta, suba
+  # este numero -- mas note que ate a fase 6 o culpado nao era ele: a cauda da
+  # palavra de ativacao armava o endpointing e valia o silencio_final_ms de 700 ms.
+  espera_inicial_s: 6.0
+  # Teto do que se absorve como sendo a palavra de ativacao (~0,9 s). Evita engolir
+  # a pergunta de quem fala tudo numa tirada: "Aristoteles, que horas sao?".
+  absorver_max_ms: 1300
   # Gate de energia. O webrtcvad sozinho toma ruido de ventoinha / ganho alto de
   # mic USB por fala (medido: 98/100 blocos de ambiente, mesmo na agressividade 3).
   # O piso e medido na inicializacao, entao se adapta ao seu ambiente.
@@ -38,6 +44,12 @@ llm:
   effort: low                # low | medium | high  (latencia x qualidade)
   pensar: false              # true = thinking adaptativo (necessario se usar ferramentas)
   turnos_historico: 10       # pares pergunta/resposta mantidos em contexto
+  # O default do SDK e read=600s: se a API travar no meio do stream, o assistente
+  # fica dez minutos calado. `timeout_leitura_s` e por leitura sem dados, nao o
+  # total, entao 60s ja e muito folgado para uma resposta de 3 frases.
+  timeout_conexao_s: 10.0
+  timeout_leitura_s: 60.0
+  tentativas: 2              # retentativas do SDK antes de desistir
   prompt_sistema: |
     Voce e Aristoteles, um assistente de voz. Suas respostas serao convertidas
     em fala por um sintetizador, entao siga estas regras sem excecao:
@@ -46,13 +58,20 @@ llm:
     - Nunca inclua tags XML internas ou de sistema na resposta.
     - Escreva numeros, simbolos e siglas por extenso quando ajudar a pronuncia.
     - Se nao souber, diga que nao sabe em uma frase. Nao invente.
+    - Nunca diga a palavra "Aristoteles" na resposta: e a palavra de ativacao, e
+      dize-la faria voce interromper a si mesmo.
 
 tts:
   voz: modelos/piper/pt_BR-faber-medium.onnx
   velocidade: 1.0            # 1.0 = normal; >1 mais lento (comprimento do fonema)
 
 wake:
-  modo: push_to_talk         # "push_to_talk" (fases 0-4) | "openwakeword" (fase 5)
+  modo: openwakeword         # "push_to_talk" (fases 0-4) | "openwakeword" (fase 5)
   modelo: modelos/wake/aristoteles.onnx
+  # Medido com `python -m treino avaliar` no modelo treinado com as gravacoes do
+  # dono desta maquina: 0.50 da recall 84,3% no conjunto aumentado (que e audio
+  # degradado de proposito) e 0,19 fp/h, ~4 despertares espurios por dia. Nas
+  # gravacoes limpas reservadas para validacao, 15/15 com pontuacao >= 0.999.
+  # Subir para 0.80 leva a 0,09 fp/h (~2/dia) custando 3 pontos de recall.
   limiar: 0.5
   cooldown_s: 1.5

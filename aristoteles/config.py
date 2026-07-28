@@ -38,7 +38,14 @@ class VadCfg:
     silencio_final_ms: int = 700
     fala_minima_ms: int = 300
     duracao_maxima_s: float = 20.0
-    espera_inicial_s: float = 4.0
+    # Tempo para o usuario *comecar* a falar depois do gatilho. Era 4,0 e parecia
+    # instantaneo, mas a culpa nao era deste numero: a cauda da palavra de ativacao
+    # armava o endpointing e valia o silencio_final_ms de 700 ms. Corrigido no
+    # gravar_ate_silencio; 6,0 da folga para formular a pergunta.
+    espera_inicial_s: float = 6.0
+    # Teto do que se absorve como sendo a palavra de ativacao. "Aristoteles" dura
+    # ~0,9 s; o teto evita engolir a pergunta de quem fala tudo sem pausa.
+    absorver_max_ms: int = 1_300
     # Gate de energia: o webrtcvad sozinho toma ruido de ventoinha/mic USB por fala.
     calibracao_ms: int = 600      # duracao da medicao do piso de ruido na inicializacao
     fator_acima_do_piso: float = 3.0
@@ -62,6 +69,19 @@ class LlmCfg:
     effort: str = "low"
     pensar: bool = False
     turnos_historico: int = 10
+    # Timeouts do cliente HTTP. O default do SDK e read=600s: se a API travar no
+    # meio do stream, o assistente fica dez minutos calado. Num assistente de voz
+    # e melhor desistir e dizer que deu erro. `read` e por leitura sem dados, nao
+    # o total, entao 60s ja e muito folgado para uma resposta de 3 frases.
+    timeout_conexao_s: float = 10.0
+    timeout_leitura_s: float = 60.0
+    tentativas: int = 2
+    # Reconexao acima do que o SDK faz: ele retenta antes do stream comecar, mas
+    # se a conexao cai no meio nao remonta a chamada. O cerebro reemite o turno --
+    # so enquanto nada tiver sido falado, porque depois da primeira frase no
+    # alto-falante repetir a resposta do zero seria pior que admitir o erro.
+    reconexoes: int = 2
+    espera_reconexao_s: float = 1.0  # dobra a cada tentativa
     prompt_sistema: str = (
         "Voce e Aristoteles, um assistente de voz. Responda em portugues do Brasil, "
         "em no maximo 3 frases curtas, sem markdown, listas ou emojis. "

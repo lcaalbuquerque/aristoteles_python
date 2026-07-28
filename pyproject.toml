@@ -20,7 +20,10 @@ dependencies = [
 [project.optional-dependencies]
 # Backend de STT em CPU (padrao). CTranslate2 nao suporta GPU AMD.
 cpu = ["faster-whisper>=1.0"]
-# Palavra de ativacao (fase 5)
+# Palavra de ativacao (fase 5).
+# NAO instale com `pip install -e '.[wake]'`: o openwakeword exige tflite-runtime
+# no Linux, que nao tem wheel para Python 3.12. Use ./scripts/05_instalar_wake.sh,
+# que instala sem deps (usamos o backend onnx, o tflite nunca e importado).
 wake = ["openwakeword>=0.6"]
 dev = ["pytest>=8.0"]
 

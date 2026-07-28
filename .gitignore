@@ -10,6 +10,9 @@ dist/
 modelos/
 vendor/
 
+# dados de treino da wake word (fase 5): chega a ~18 GB com o ACAV100M
+dados_wake/
+
 # segredos e config local
 .env
 config.local.yaml
