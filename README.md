@@ -33,7 +33,7 @@ O modelo do Whisper (`small`, ~460 MB) é baixado sozinho no primeiro uso.
 
 ```bash
 python -m aristoteles                 # diga "Aristóteles", fale, escute
-python -m aristoteles --texto         # sem microfone (só LLM + TTS), para depurar
+python -m aristoteles --texto         # digita a pergunta; ignora o gatilho e o STT
 python -m aristoteles --listar-audio  # descobrir índices de dispositivo
 pytest                                # testes
 ```
@@ -240,22 +240,38 @@ Detalhes que custaram tempo e estão no código:
 |---|---|---|
 | Silêncio até fim da gravação | 0,70 s | `vad.silencio_final_ms` |
 | Whisper `small` (CPU, int8, 8 threads) | **0,85–0,92 s** | RTF 0,30–0,67; carga+aquecimento 2,0 s |
-| Claude — 1º token (effort `low`) | **1,36 s** | mediana de 3 perguntas; 1,13–1,50 s |
-| Claude — 1ª frase completa | **2,06 s** | 1,92–2,94 s — **é este que conta** |
+| Claude — 1ª frase (`claude-sonnet-5`, effort `low`) | **1,87 s** | 1,33–2,16 s — **é este que conta** |
 | Piper (1ª frase) | **~0,05 s** | RTF 0,04 — 25× mais rápido que tempo real; carga 0,9 s |
-| **Até ouvir a resposta** | **~3,7 s** | 0,70 + 0,90 + 2,06 + 0,05 |
+| **Até ouvir a resposta** | **~3,5 s** | 0,70 + 0,90 + 1,87 + 0,05 |
 
-Atenção à diferença entre as duas linhas do Claude: o áudio não começa no primeiro
-token, começa quando [frases.py](aristoteles/frases.py) fecha a **primeira frase** —
-são 0,7 s a mais, e é esse o número do orçamento. O `[N.Ns]` que o loop principal
-imprime é o tempo até a primeira frase, não até o primeiro token.
+O áudio não começa no primeiro token, começa quando
+[frases.py](aristoteles/frases.py) fecha a **primeira frase** — com o Opus 5 isso
+custava 0,7 s a mais que o primeiro token, e é o número da primeira frase que forma
+o orçamento. O `[N.Ns]` que o loop principal imprime é esse.
 
-O TTS é irrelevante no orçamento. O gargalo é Claude (2,06 s) seguido de Whisper
+### Por que `claude-sonnet-5` e não `claude-opus-5`
+
+Mesmas 3 perguntas, mesmo `effort: low`, medido em sequência nesta máquina:
+
+| Modelo | 1ª frase (mediana) | Faixa |
+|---|---|---|
+| `claude-opus-5` | 2,47 s | 1,93 – **5,10** s |
+| **`claude-sonnet-5`** | **1,87 s** | 1,33 – 2,16 s |
+
+Ganha 0,6 s na mediana, mas o que mais importa é a **dispersão**: o pico de 5,10 s do
+Opus desaparece. Num assistente de voz a variância é pior que a média — 5 s de
+silêncio depois do bipe faz o usuário repetir a pergunta. (n=3 por modelo, uma
+rodada; é indicativo, não rigoroso.)
+
+Para perguntas que exijam raciocínio mais pesado, troque em `config.yaml` ou suba
+`llm.effort`.
+
+O TTS é irrelevante no orçamento. O gargalo é Claude (1,87 s) seguido de Whisper
 (0,90 s). Duas alavancas, em ordem de retorno:
 
-1. **Encurtar a primeira frase.** É o caminho mais barato — 0,7 s estão em gerar o
-   resto da frase depois do primeiro token. Pedir no `prompt_sistema` que a primeira
-   frase seja curta corta isso sem trocar nada de infraestrutura.
+1. **Encurtar a primeira frase.** É o caminho mais barato — parte do tempo está em
+   gerar o resto da frase depois do primeiro token. Pedir no `prompt_sistema` que a
+   primeira frase seja curta corta isso sem trocar nada de infraestrutura.
 2. **Backend Vulkan** para o Whisper, que ganha ~0,9 s e libera CPU (ou permite
    `medium` pelo mesmo custo de latência do `small` em CPU).
 
@@ -363,6 +379,9 @@ caminho de saída limpa que já existia.
 
 ## Notas de configuração
 
+- **`llm.modelo`**: `claude-sonnet-5` é o padrão porque a latência é o gargalo — veja
+  a comparação medida acima. Trocar aqui, no `config.yaml`, é o que vale: o valor no
+  `config.py` é só o default do código.
 - **`llm.effort`**: `low` para conversa, `medium`/`high` para perguntas difíceis.
 - **`llm.pensar`**: `false` reduz latência, e é o padrão. Tem dois efeitos colaterais
   documentados do Opus 5 com thinking desligado:

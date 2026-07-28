@@ -39,7 +39,7 @@ stt:
   servidor_url: http://127.0.0.1:8178/inference
 
 llm:
-  modelo: claude-opus-5
+  modelo: claude-sonnet-5    # o gargalo da latencia e o LLM; veja a tabela no README
   max_tokens: 1024
   effort: low                # low | medium | high  (latencia x qualidade)
   pensar: false              # true = thinking adaptativo (necessario se usar ferramentas)

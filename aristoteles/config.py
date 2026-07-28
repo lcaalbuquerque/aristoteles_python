@@ -64,6 +64,8 @@ class SttCfg:
 
 @dataclass
 class LlmCfg:
+    # Default do codigo. Quem manda no que roda e o config.yaml -- veja a
+    # docstring do modulo.
     modelo: str = "claude-opus-5"
     max_tokens: int = 1024
     effort: str = "low"
@@ -97,7 +99,7 @@ class TtsCfg:
 
 @dataclass
 class LogCfg:
-    """Copia para arquivo de tudo que o app imprime no console."""
+    """Copia para arquivo tudo que o app imprime no console."""
     ativo: bool = True
     arquivo: Path = Path("logs/aristoteles.log")
     # Rodizio, porque como servico systemd o app fica ligado por dias.

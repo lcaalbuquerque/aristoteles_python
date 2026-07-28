@@ -139,9 +139,15 @@ def _executar(args, cfg: Config, registro: Registro) -> int:
                 if pendente is not None:
                     pergunta, pendente = pendente, None
                 elif args.texto:
-                    if not gatilho.aguardar(entrada):
+                    # NAO passa pelo gatilho: `--texto` existe para depurar sem
+                    # microfone, e com wake.modo: openwakeword o `aguardar()`
+                    # ficaria esperando a palavra falada -- o oposto do proposito.
+                    try:
+                        pergunta = input("voce > ").strip()
+                    except EOFError:
                         break
-                    pergunta = input("voce > ").strip()
+                    if pergunta.lower() in ("sair", "q", "quit", "exit"):
+                        break
                     if not pergunta:
                         continue
                 else:
