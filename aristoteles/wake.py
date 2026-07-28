@@ -1,11 +1,16 @@
 """Gatilho de ativacao.
 
-Fases 0-4: push-to-talk (Enter). Fase 5: openWakeWord com modelo "Aristoteles"
-treinado a partir de audio sintetico -- veja o README.
+Dois modos atras do mesmo `Protocol`: push-to-talk (Enter) e openWakeWord.
+
+Alem de `aguardar()`, que bloqueia no ocioso, os gatilhos expoem `alimentar()`
+para avaliar um bloco isolado. E o que permite vigiar o microfone *enquanto o
+assistente fala* -- o barge-in da fase 6. Sem isso o loop principal teria de
+escolher entre esperar a fala terminar e reimplementar a deteccao.
 """
 
 from __future__ import annotations
 
+import time
 from typing import Protocol
 
 import numpy as np
@@ -19,14 +24,29 @@ class Gatilho(Protocol):
         """Bloqueia ate o usuario chamar. False = encerrar o programa."""
         ...
 
+    def alimentar(self, bloco: np.ndarray) -> bool:
+        """Avalia um bloco isolado. True = ouviu a palavra agora."""
+        ...
+
+    def reiniciar(self) -> None:
+        """Zera o estado interno antes de comecar a escutar."""
+        ...
+
     @property
     def usa_pre_roll(self) -> bool: ...
+
+    @property
+    def suporta_barge_in(self) -> bool: ...
 
 
 class PushToTalk:
     """Gatilho manual: Enter grava, Ctrl-D ou 'sair' encerra."""
 
     usa_pre_roll = False
+    # Sem barge-in: quem esta no teclado interrompe com Ctrl-C, e vigiar o
+    # microfone durante a fala nao faria sentido num modo que ignora o microfone
+    # no ocioso.
+    suporta_barge_in = False
 
     def aguardar(self, entrada: EntradaAudio) -> bool:
         try:
@@ -38,11 +58,18 @@ class PushToTalk:
         entrada.limpar()  # descarta o que entrou enquanto esperava
         return True
 
+    def alimentar(self, bloco: np.ndarray) -> bool:
+        return False
+
+    def reiniciar(self) -> None:
+        pass
+
 
 class OpenWakeWord:
     """Escuta continua ate ouvir a palavra de ativacao."""
 
     usa_pre_roll = True
+    suporta_barge_in = True
 
     def __init__(self, cfg: WakeCfg, raiz) -> None:
         from pathlib import Path
@@ -61,17 +88,39 @@ class OpenWakeWord:
         openwakeword.utils.download_models()  # baixa o melspectrogram/embedding base
         self._modelo = Model(wakeword_models=[str(caminho)], inference_framework="onnx")
         self.cfg = cfg
+        self._mudo_ate = 0.0
+
+    def reiniciar(self) -> None:
+        self._modelo.reset()
+        self._mudo_ate = 0.0
+
+    def alimentar(self, bloco: np.ndarray) -> bool:
+        """Avalia um bloco. Respeita o cooldown depois de um disparo.
+
+        O cooldown existe porque uma unica pronuncia da palavra atravessa varias
+        janelas do modelo e passa do limiar em mais de uma. Sem ele, interromper a
+        fala com "Aristoteles" disparava de novo no bloco seguinte, e o assistente
+        entrava e saia da gravacao.
+        """
+        agora = time.monotonic()
+        if agora < self._mudo_ate:
+            self._modelo.predict(bloco)  # mantem o buffer de features coerente
+            return False
+        pontuacoes = self._modelo.predict(bloco)
+        if max(pontuacoes.values(), default=0.0) >= self.cfg.limiar:
+            self._mudo_ate = agora + self.cfg.cooldown_s
+            return True
+        return False
 
     def aguardar(self, entrada: EntradaAudio) -> bool:
-        self._modelo.reset()
+        self.reiniciar()
         entrada.limpar()
         print("\nOuvindo... (diga 'Aristoteles')")
         while True:
             bloco = entrada.ler(timeout=1.0)
             if bloco is None:
                 continue
-            pontuacoes = self._modelo.predict(bloco)
-            if max(pontuacoes.values(), default=0.0) >= self.cfg.limiar:
+            if self.alimentar(bloco):
                 return True
 
 
