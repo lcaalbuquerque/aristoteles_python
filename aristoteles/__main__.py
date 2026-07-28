@@ -14,6 +14,7 @@ from . import stt as stt_mod
 from . import wake as wake_mod
 from .audio.entrada import EntradaAudio, listar_dispositivos
 from .audio.saida import SaidaAudio, beep
+from .barge_in import VigiaBargeIn
 from .cerebro import Cerebro
 from .config import Config
 from .tts import Voz
@@ -72,50 +73,70 @@ def main() -> int:
                 print(f" piso={detector.piso_ruido:.4f} limiar={limiar:.4f}")
                 if detector.piso_ruido > 0.05:
                     print("  AVISO: ambiente ruidoso. Considere baixar o ganho do microfone.")
-            print("\nPronto.\n")
-            while True:
-                # --- OCIOSO -> DESPERTO ---
-                if not gatilho.aguardar(entrada):
-                    break
+            def ouvir() -> str | None:
+                """Bipe, grava ate o silencio, transcreve. None = nao deu."""
+                beep(880, dispositivo=cfg.audio.dispositivo_saida)
+                print("  [ouvindo]", end="", flush=True)
+                audio = gravar_ate_silencio(entrada, detector, cfg.vad,
+                                            gatilho.usa_pre_roll,
+                                            absorver_gatilho=gatilho.usa_pre_roll)
+                beep(660, 0.08, dispositivo=cfg.audio.dispositivo_saida)
+                if audio is None:
+                    print(f"\r  [nao ouvi nada: {detector.ultimo_motivo}]")
+                    return None
+                t0 = time.perf_counter()
+                dito = transcritor.transcrever(audio)
+                if not dito:
+                    print("\r  [nao entendi]        ")
+                    return None
+                print(f"\r  voce ({time.perf_counter() - t0:.1f}s): {dito}")
+                return dito
 
-                # --- OUVINDO ---
-                if args.texto:
+            print("\nPronto.\n")
+            # Preenchido quando um barge-in ja capturou a proxima pergunta: nesse
+            # caso nao voltamos ao ocioso, porque o usuario acabou de falar.
+            pendente: str | None = None
+            while True:
+                # --- OCIOSO -> DESPERTO -> OUVINDO ---
+                if pendente is not None:
+                    pergunta, pendente = pendente, None
+                elif args.texto:
+                    if not gatilho.aguardar(entrada):
+                        break
                     pergunta = input("voce > ").strip()
                     if not pergunta:
                         continue
                 else:
-                    beep(880, dispositivo=cfg.audio.dispositivo_saida)
-                    print("  [ouvindo]", end="", flush=True)
-                    audio = gravar_ate_silencio(entrada, detector, cfg.vad, gatilho.usa_pre_roll)
-                    beep(660, 0.08, dispositivo=cfg.audio.dispositivo_saida)
-                    if audio is None:
-                        print("\r  [nao ouvi nada]     ")
+                    if not gatilho.aguardar(entrada):
+                        break
+                    if (pergunta := ouvir()) is None:
                         continue
-
-                    # --- TRANSCREVENDO ---
-                    t0 = time.perf_counter()
-                    pergunta = transcritor.transcrever(audio)
-                    dt_stt = time.perf_counter() - t0
-                    if not pergunta:
-                        print("\r  [nao entendi]        ")
-                        continue
-                    print(f"\r  voce ({dt_stt:.1f}s): {pergunta}")
 
                 # --- PENSANDO -> FALANDO ---
                 saida.retomar()
                 t0 = time.perf_counter()
                 primeira = True
                 print("  aristoteles: ", end="", flush=True)
-                for frase in cerebro.responder(pergunta):
-                    if primeira:
-                        print(f"[{time.perf_counter() - t0:.1f}s] ", end="", flush=True)
-                        primeira = False
-                    print(frase, end=" ", flush=True)
-                    for bloco in voz.sintetizar(frase):
-                        saida.enfileirar(bloco)
+                # Vigia a palavra de ativacao durante a fala: dize-la interrompe.
+                with VigiaBargeIn(gatilho, entrada, saida,
+                                  ativo=not args.texto) as vigia:
+                    for frase in cerebro.responder(pergunta):
+                        if vigia.interrompido:
+                            break
+                        if primeira:
+                            print(f"[{time.perf_counter() - t0:.1f}s] ", end="", flush=True)
+                            primeira = False
+                        print(frase, end=" ", flush=True)
+                        for bloco in voz.sintetizar(frase):
+                            saida.enfileirar(bloco)
+                    saida.aguardar()
                 print()
-                saida.aguardar()
-                entrada.limpar()  # nao escutar a propria resposta
+
+                if vigia.interrompido:
+                    print("  [interrompido]")
+                    pendente = ouvir()  # ja ouviu a palavra; nao volta ao ocioso
+                else:
+                    entrada.limpar()  # nao escutar a propria resposta
 
     except KeyboardInterrupt:
         print("\nEncerrando.")
