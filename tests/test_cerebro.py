@@ -1,9 +1,15 @@
-"""A janela de historico e o filtro de tags -- as duas partes puras do cerebro.
+"""A janela de historico, o filtro de tags e o tratamento de erro da API.
 
-Nao instanciamos `Cerebro` aqui: o construtor exige credencial da API.
+A maior parte nao instancia `Cerebro`: o construtor exige credencial da API. Os
+testes de erro injetam uma credencial falsa e um cliente dublê, sem tocar na rede.
 """
 
-from aristoteles.cerebro import aparar_historico
+import anthropic
+import httpx
+import pytest
+
+from aristoteles.cerebro import Cerebro, aparar_historico
+from aristoteles.config import LlmCfg
 from aristoteles.frases import sem_tags
 
 
@@ -77,3 +83,214 @@ def test_nao_mexe_em_matematica():
 def test_texto_normal_passa_intacto():
     frase = "Sao quinze graus em Sao Paulo."
     assert sem_tags(frase) is frase
+
+
+# --- credencial ----------------------------------------------------------------
+
+def test_newline_no_fim_da_chave_e_aparado(monkeypatch, capsys):
+    """A regressao relatada.
+
+    Uma chave terminando em \\n nao da erro de autenticacao: da
+    LocalProtocolError("Illegal header value ..."), que o SDK embrulha em
+    APIConnectionError -- e o assistente passa a culpar a rede.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-abc\n")
+    c = Cerebro(LlmCfg())
+    assert c._cliente.api_key == "sk-ant-api03-abc"
+    assert "quebra de linha" in capsys.readouterr().out
+
+
+def test_espacos_em_volta_da_chave_sao_aparados(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "  sk-ant-api03-abc\t\r\n ")
+    assert Cerebro(LlmCfg())._cliente.api_key == "sk-ant-api03-abc"
+
+
+def test_chave_limpa_nao_gera_aviso(monkeypatch, capsys):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-abc")
+    Cerebro(LlmCfg())
+    assert capsys.readouterr().out == ""
+
+
+def test_newline_no_meio_da_chave_falha_na_inicializacao(monkeypatch):
+    """`strip()` nao resolve isso -- e melhor recusar do que culpar a rede depois."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03\nabc")
+    with pytest.raises(RuntimeError, match="cabeçalho HTTP"):
+        Cerebro(LlmCfg())
+
+
+def test_credencial_ausente_falha_com_instrucao(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    # o SDK tambem procura o perfil do `ant auth login`; forca a ausencia
+    monkeypatch.setattr(anthropic, "Anthropic",
+                        lambda **kw: type("C", (), {"api_key": None, "auth_token": None,
+                                                    "timeout": None, "max_retries": 0})())
+    with pytest.raises(RuntimeError, match="Nenhuma credencial"):
+        Cerebro(LlmCfg())
+
+
+def test_chave_so_com_espaco_conta_como_ausente(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   \n")
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    from aristoteles.cerebro import _credencial_limpa
+    assert _credencial_limpa() == {}
+
+
+# --- tratamento de erro da API -------------------------------------------------
+
+def _cerebro(monkeypatch, erro: Exception, reconexoes: int = 0) -> Cerebro:
+    """Cerebro cujo `messages.stream` levanta `erro`. Nao toca na rede.
+
+    `reconexoes=0` por default: estes testes checam a mensagem falada, nao a
+    reconexao, e esperar de verdade so deixaria a suite lenta.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=reconexoes, espera_reconexao_s=0.0))
+
+    def estoura(*_a, **_k):
+        raise erro
+
+    monkeypatch.setattr(c._cliente.messages, "stream", estoura)
+    return c
+
+
+def test_timeout_nao_e_anunciado_como_falta_de_internet(monkeypatch, capsys):
+    """A regressao relatada: rede perfeitamente sa, e o assistente afirmava estar
+    sem internet.
+
+    `APITimeoutError` e subclasse de `APIConnectionError`, entao o `except` da
+    conexao capturava os timeouts e dava um diagnostico falso -- que manda o
+    usuario depurar a rede errada.
+    """
+    assert issubclass(anthropic.APITimeoutError, anthropic.APIConnectionError)
+
+    erro = anthropic.APITimeoutError(request=httpx.Request("POST", "http://x"))
+    c = _cerebro(monkeypatch, erro)
+    dito = " ".join(c.responder("oi"))
+
+    assert "internet" not in dito.lower()
+    assert "demorei" in dito.lower()
+    assert "timeout" in capsys.readouterr().out.lower()  # deixa pista no log
+
+
+def test_falha_de_conexao_registra_a_causa(monkeypatch, capsys):
+    """Era o unico handler sem print: o usuario ficava sem nenhuma pista."""
+    causa = OSError("Name or service not known")
+    erro = anthropic.APIConnectionError(request=httpx.Request("POST", "http://x"))
+    erro.__cause__ = causa
+
+    c = _cerebro(monkeypatch, erro)
+    dito = " ".join(c.responder("oi"))
+
+    assert "servidor" in dito.lower()
+    assert "Name or service not known" in capsys.readouterr().out
+
+
+def test_reconecta_e_responde_se_nada_foi_falado(monkeypatch, capsys):
+    """Uma queda antes da primeira frase nao deve custar a pergunta ao usuario."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=2, espera_reconexao_s=0.0))
+
+    chamadas = {"n": 0}
+
+    def transmitir():
+        chamadas["n"] += 1
+        if chamadas["n"] == 1:
+            raise anthropic.APIConnectionError(request=httpx.Request("POST", "http://x"))
+        yield "Pronto."
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    assert list(c.responder("oi")) == ["Pronto."]
+    assert chamadas["n"] == 2
+    assert "reconectando" in capsys.readouterr().out
+
+
+def test_nao_reconecta_depois_de_ja_ter_falado(monkeypatch):
+    """Repetir a resposta do zero e pior que admitir o erro: o alto-falante nao
+    tem desfazer."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=2, espera_reconexao_s=0.0))
+
+    chamadas = {"n": 0}
+
+    def transmitir():
+        chamadas["n"] += 1
+        yield "Primeira frase."
+        raise anthropic.APIConnectionError(request=httpx.Request("POST", "http://x"))
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    dito = list(c.responder("oi"))
+    assert chamadas["n"] == 1, "retentou apesar de ja ter falado"
+    assert dito[0] == "Primeira frase."
+    assert "servidor" in dito[-1].lower()
+
+
+def test_desiste_depois_das_reconexoes_configuradas(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=3, espera_reconexao_s=0.0))
+
+    chamadas = {"n": 0}
+
+    def transmitir():
+        chamadas["n"] += 1
+        raise anthropic.APITimeoutError(request=httpx.Request("POST", "http://x"))
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    dito = list(c.responder("oi"))
+    assert chamadas["n"] == 4          # 1 tentativa + 3 reconexoes
+    assert "demorei" in dito[-1].lower()
+    assert list(c._historico) == []    # nao deixa pergunta orfa
+
+
+def test_espera_dobra_entre_reconexoes(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=3, espera_reconexao_s=0.5))
+    esperas = []
+    monkeypatch.setattr("aristoteles.cerebro.time.sleep", esperas.append)
+
+    def transmitir():
+        raise anthropic.APIConnectionError(request=httpx.Request("POST", "http://x"))
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    list(c.responder("oi"))
+    assert esperas == [0.5, 1.0, 2.0]
+
+
+def test_erro_nao_de_rede_nao_reconecta(monkeypatch):
+    """Recusa de credencial nao melhora esperando."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=3, espera_reconexao_s=0.0))
+
+    chamadas = {"n": 0}
+
+    def transmitir():
+        chamadas["n"] += 1
+        raise anthropic.AuthenticationError(
+            "nao", response=httpx.Response(401, request=httpx.Request("GET", "http://x")),
+            body=None)
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    dito = list(c.responder("oi"))
+    assert chamadas["n"] == 1
+    assert "chave" in dito[-1].lower()
+
+
+def test_erro_nao_deixa_pergunta_orfa_no_historico(monkeypatch):
+    """Turno sem resposta na frente do historico faria a proxima chamada dar 400."""
+    erro = anthropic.APITimeoutError(request=httpx.Request("POST", "http://x"))
+    c = _cerebro(monkeypatch, erro)
+    list(c.responder("pergunta que falhou"))
+    assert list(c._historico) == []
+
+
+def test_timeouts_vem_da_config(monkeypatch):
+    """Default do SDK e read=600s: dez minutos de silencio num assistente de voz."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(timeout_conexao_s=3.0, timeout_leitura_s=7.0, tentativas=1))
+    assert c._cliente.timeout.connect == 3.0
+    assert c._cliente.timeout.read == 7.0
+    assert c._cliente.max_retries == 1
+    assert LlmCfg().timeout_leitura_s < 600
