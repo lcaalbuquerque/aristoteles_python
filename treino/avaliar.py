@@ -82,7 +82,7 @@ def avaliar(modelo: Path, dir_features: Path, dir_dados: Path,
         s = min(viaveis, key=lambda l: l["limiar"])
         print(f"\n  sugestão: wake.limiar = {s['limiar']:.2f}  "
               f"(recall {s['recall']:.1%}, {s['fp_por_hora']:.2f} fp/h "
-              f"≈ {s['fp_por_hora'] * 24:.0f} despertares espúrios/dia)")
+              f"~ {s['fp_por_hora'] * 24:.0f} despertares espúrios/dia)")
         if s["recall"] < 0.8:
             print("  recall baixo: mais gravações suas (python -m treino gravar)")
             print("  ajudam mais que mais passos de treino.")
