@@ -4,6 +4,8 @@ A maior parte nao instancia `Cerebro`: o construtor exige credencial da API. Os
 testes de erro injetam uma credencial falsa e um cliente dublê, sem tocar na rede.
 """
 
+from pathlib import Path
+
 import anthropic
 import httpx
 import pytest
@@ -127,6 +129,59 @@ def test_credencial_ausente_falha_com_instrucao(monkeypatch):
                                                     "timeout": None, "max_retries": 0})())
     with pytest.raises(RuntimeError, match="Nenhuma credencial"):
         Cerebro(LlmCfg())
+
+
+def test_le_a_chave_do_arquivo_quando_o_ambiente_nao_tem(monkeypatch, tmp_path):
+    """A regressao relatada.
+
+    O servico systemd nao herda o ambiente do login, entao lia uma copia da chave
+    em ~/.config/aristoteles/env. Rotacionar a chave atualizou o original e deixou
+    a copia com a revogada: funcionava no terminal e devolvia 401 so como servico.
+    Com o app lendo o arquivo original, a chave tem um lugar so.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    arq = tmp_path / "chave"
+    arq.write_text("sk-ant-do-arquivo\n", encoding="utf-8")
+
+    c = Cerebro(LlmCfg(arquivo_chave=arq))
+    assert c._cliente.api_key == "sk-ant-do-arquivo"  # e sem o \n
+
+
+def test_ambiente_tem_prioridade_sobre_o_arquivo(monkeypatch, tmp_path):
+    """Quem exporta a variavel esta sendo explicito; nao atropelamos."""
+    arq = tmp_path / "chave"
+    arq.write_text("sk-ant-do-arquivo", encoding="utf-8")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-do-ambiente")
+    assert Cerebro(LlmCfg(arquivo_chave=arq))._cliente.api_key == "sk-ant-do-ambiente"
+
+
+def test_arquivo_de_chave_ausente_nao_explode(monkeypatch, tmp_path):
+    from aristoteles.cerebro import _credencial_limpa
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    assert _credencial_limpa(tmp_path / "nao_existe") == {}
+
+
+def test_arquivo_de_chave_vazio_conta_como_ausente(monkeypatch, tmp_path):
+    from aristoteles.cerebro import _credencial_limpa
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    arq = tmp_path / "vazio"
+    arq.write_text("   \n", encoding="utf-8")
+    assert _credencial_limpa(arq) == {}
+
+
+def test_til_no_caminho_do_arquivo_e_expandido(monkeypatch, tmp_path):
+    from aristoteles.cerebro import _credencial_limpa
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".anthropic_api_key").write_text("sk-ant-via-til", encoding="utf-8")
+    assert _credencial_limpa(Path("~/.anthropic_api_key")) == {"api_key": "sk-ant-via-til"}
 
 
 def test_chave_so_com_espaco_conta_como_ausente(monkeypatch):

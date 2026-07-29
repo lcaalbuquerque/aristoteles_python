@@ -128,9 +128,29 @@ systemctl --user disable --now aristoteles   # desfazer
 Serviço de **usuário**, não de sistema: precisa da sessão de áudio (PipeWire) do seu
 login — um serviço de sistema não alcança o microfone. O script recusa instalar se
 `wake.modo` não for `openwakeword` (sem terminal, o push-to-talk espera um Enter que
-nunca vem) ou se o modelo da wake word não existir, e cria
-`~/.config/aristoteles/env` com modo 600 aparando espaços da chave — o systemd não
-apara por você, e um `\n` ali reapareceria como falso erro de rede.
+nunca vem) ou se o modelo da wake word não existir.
+
+**A credencial tem um lugar só: `~/.anthropic_api_key`.** O serviço não herda o seu
+ambiente, e a primeira versão resolvia isso copiando a chave para
+`~/.config/aristoteles/env` — o que garantiu divergência. Numa rotação o original foi
+atualizado, a cópia ficou com a chave revogada, e o resultado foi um sintoma
+enganoso: **funcionava no terminal e devolvia 401 só como serviço**.
+
+Agora o [cerebro.py](aristoteles/cerebro.py) lê `llm.arquivo_chave` quando
+`ANTHROPIC_API_KEY` não está no ambiente, nesta ordem:
+
+1. `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` (quem exporta está sendo explícito)
+2. `llm.arquivo_chave` — `~/.anthropic_api_key`
+3. o perfil do `ant auth login`
+
+Assim `.bashrc` e serviço leem a mesma fonte, e rotacionar a chave é editar um
+arquivo. O `EnvironmentFile` do unit ficou opcional (`-` na frente) e serve para
+outras variáveis; se ainda tiver uma chave lá, ela **vence** — o script avisa quando
+divergir do original.
+
+Ao trocar a chave: `printf %s 'sk-ant-nova' > ~/.anthropic_api_key` (o `printf %s`
+evita o `\n` que reapareceria como falso erro de rede) e
+`systemctl --user restart aristoteles`.
 
 ### Fase 5 — treinar a wake word
 

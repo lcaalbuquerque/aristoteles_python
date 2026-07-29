@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 from collections import deque
+from pathlib import Path
 from typing import Iterator
 
 import anthropic
@@ -14,8 +15,16 @@ from .config import LlmCfg
 from .frases import AcumuladorDeFrases, sem_tags
 
 
-def _credencial_limpa() -> dict[str, str]:
-    """Le a credencial do ambiente e apara espaco em branco das pontas.
+def _credencial_limpa(arquivo: Path | None = None) -> dict[str, str]:
+    """Acha a credencial e apara espaco em branco das pontas.
+
+    Ordem: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, o arquivo `arquivo`, e por
+    fim a resolucao do proprio SDK (perfil do `ant auth login`).
+
+    O arquivo existe para a chave ter **um lugar so**. Antes, o servico systemd
+    lia uma copia em `~/.config/aristoteles/env`; rotacionar a chave atualizou o
+    original e deixou a copia com a revogada, e todo pedido virou 401 -- com o
+    agravante de o app funcionar no terminal e falhar so como servico.
 
     Motivo: um `\\n` no fim da chave nao vira erro de autenticacao, vira
 
@@ -28,8 +37,8 @@ def _credencial_limpa() -> dict[str, str]:
     Acontece facil: `export ANTHROPIC_API_KEY=$(cat arquivo)` apara sozinho, mas
     colar a chave no terminal ou num EnvironmentFile do systemd nao.
 
-    Devolve kwargs vazios se nada estiver no ambiente, para nao atropelar a
-    resolucao do SDK pelo perfil do `ant auth login`.
+    Devolve kwargs vazios se nada for encontrado, para nao atropelar a resolucao
+    do SDK pelo perfil do `ant auth login`.
     """
     for var, kwarg in (("ANTHROPIC_API_KEY", "api_key"),
                        ("ANTHROPIC_AUTH_TOKEN", "auth_token")):
@@ -43,6 +52,16 @@ def _credencial_limpa() -> dict[str, str]:
             print(f"[cerebro] {var} tinha espaço/quebra de linha nas pontas; "
                   "aparei. Corrija a origem para evitar erro noutro cliente.")
         return {kwarg: limpo}
+
+    if arquivo is not None:
+        caminho = Path(arquivo).expanduser()
+        try:
+            limpo = caminho.read_text(encoding="utf-8").strip()
+        except OSError:
+            return {}
+        if limpo:
+            print(f"[cerebro] credencial lida de {caminho}")
+            return {"api_key": limpo}
     return {}
 
 
@@ -66,7 +85,7 @@ class Cerebro:
     def __init__(self, cfg: LlmCfg) -> None:
         self.cfg = cfg
         self._cliente = anthropic.Anthropic(
-            **_credencial_limpa(),
+            **_credencial_limpa(cfg.arquivo_chave),
             timeout=httpx.Timeout(
                 connect=cfg.timeout_conexao_s,
                 read=cfg.timeout_leitura_s,

@@ -31,28 +31,40 @@ fi
 
 # --- 2. arquivo de ambiente com a credencial ----------------------------------
 
-mkdir -p "$ENV_DIR"
-chmod 700 "$ENV_DIR"
+# NAO copiamos a chave para ca. O app le ~/.anthropic_api_key quando
+# ANTHROPIC_API_KEY nao esta no ambiente, e uma copia significa divergencia: numa
+# rotacao o original foi atualizado, a copia ficou com a revogada, e o app
+# funcionava no terminal e devolvia 401 so como servico.
+ARQ_CHAVE="$HOME/.anthropic_api_key"
 
-if [[ -f "$ENV_FILE" ]]; then
-    echo "ja existe: $ENV_FILE (nao vou sobrescrever)"
-else
-    chave="${ANTHROPIC_API_KEY:-}"
-    if [[ -z "$chave" && -f "$HOME/.anthropic_api_key" ]]; then
-        chave="$(cat "$HOME/.anthropic_api_key")"
-    fi
-    if [[ -z "$chave" ]]; then
+if [[ ! -s "$ARQ_CHAVE" ]]; then
+    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        printf %s "$(printf %s "$ANTHROPIC_API_KEY" | tr -d '[:space:]')" > "$ARQ_CHAVE"
+        chmod 600 "$ARQ_CHAVE"
+        echo "criado: $ARQ_CHAVE a partir do ambiente (modo 600)"
+    else
         echo "ERRO: nao achei a credencial." >&2
-        echo "  export ANTHROPIC_API_KEY=... e rode de novo, ou crie na mao:" >&2
-        echo "    printf 'ANTHROPIC_API_KEY=%s\\n' 'sk-ant-...' > $ENV_FILE" >&2
+        echo "  O servico nao herda o seu ambiente. Grave a chave em $ARQ_CHAVE:" >&2
+        echo "    printf %s 'sk-ant-...' > $ARQ_CHAVE && chmod 600 $ARQ_CHAVE" >&2
         exit 1
     fi
-    # `printf %s` com a expansao ja aparada: um \n no meio do valor viraria
-    # LocalProtocolError na primeira pergunta, e o assistente culparia a rede.
-    # O systemd nao apara o valor por voce.
-    printf 'ANTHROPIC_API_KEY=%s\n' "$(printf %s "$chave" | tr -d '[:space:]')" > "$ENV_FILE"
-    chmod 600 "$ENV_FILE"
-    echo "criado: $ENV_FILE (modo 600)"
+else
+    echo "credencial: $ARQ_CHAVE ($(stat -c%a "$ARQ_CHAVE"))"
+    if [[ "$(stat -c%a "$ARQ_CHAVE")" != "600" ]]; then
+        echo "  AVISO: permissao frouxa; corrija com chmod 600 $ARQ_CHAVE" >&2
+    fi
+fi
+
+# Se um env file antigo ainda carrega a chave, ele VENCE (o systemd o injeta no
+# ambiente, e o ambiente tem prioridade). Avisa quando divergir do original.
+if [[ -f "$ENV_FILE" ]] && grep -q '^ANTHROPIC_API_KEY=' "$ENV_FILE"; then
+    a=$(sed -nE 's/^ANTHROPIC_API_KEY=//p' "$ENV_FILE" | tr -d '[:space:]')
+    b=$(tr -d '[:space:]' < "$ARQ_CHAVE")
+    if [[ "$a" != "$b" ]]; then
+        echo "  AVISO: $ENV_FILE tem uma chave DIFERENTE de $ARQ_CHAVE." >&2
+        echo "  Ela tem prioridade e vai ser usada pelo servico. Se foi rotacao," >&2
+        echo "  remova a linha ANTHROPIC_API_KEY de $ENV_FILE." >&2
+    fi
 fi
 
 # --- 3. o unit ----------------------------------------------------------------

@@ -17,8 +17,13 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/aristoteles_python
 Environment=PYTHONUNBUFFERED=1
-# Prefira um arquivo de ambiente a deixar a chave no unit file:
-EnvironmentFile=%h/.config/aristoteles/env
+# Opcional (o "-"): o app le a credencial de ~/.anthropic_api_key quando
+# ANTHROPIC_API_KEY nao esta no ambiente, entao este arquivo nao precisa conter a
+# chave. Duplica-la aqui foi o que quebrou o servico depois de uma rotacao: o
+# original foi atualizado, a copia ficou com a chave revogada, e o app funcionava
+# no terminal e devolvia 401 so como servico. Use este arquivo para OUTRAS
+# variaveis de ambiente, se precisar.
+EnvironmentFile=-%h/.config/aristoteles/env
 ExecStart=%h/aristoteles_python/.venv/bin/python -m aristoteles
 Restart=on-failure
 RestartSec=5

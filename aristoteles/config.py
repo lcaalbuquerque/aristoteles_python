@@ -95,6 +95,11 @@ class LlmCfg:
     # alto-falante repetir a resposta do zero seria pior que admitir o erro.
     reconexoes: int = 2
     espera_reconexao_s: float = 1.0  # dobra a cada tentativa
+    # Fonte da credencial quando ANTHROPIC_API_KEY nao esta no ambiente -- o que e
+    # o caso do servico systemd. Existe para a chave ter UM lugar so: duplicar em
+    # ~/.config/aristoteles/env garantia divergencia, e garantiu: rotacionar a
+    # chave deixou o servico com a revogada e todo pedido virou 401.
+    arquivo_chave: Path = Path("~/.anthropic_api_key")
     prompt_sistema: str = (
         "Voce e Aristoteles, um assistente de voz. Responda em portugues do Brasil, "
         "em no maximo 3 frases curtas, sem markdown, listas ou emojis. "
