@@ -69,7 +69,7 @@ llm:
       dize-la faria voce interromper a si mesmo.
 
 tts:
-  voz: modelos/piper/pt_BR-faber-medium.onnx
+  voz: modelos/piper/pt_BR-cadu-medium.onnx
   velocidade: 1.0            # 1.0 = normal; >1 mais lento (comprimento do fonema)
 
 log:
