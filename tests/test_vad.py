@@ -57,6 +57,68 @@ def test_calibracao_define_limiar_acima_do_piso():
     assert limiar == pytest.approx(det.piso_ruido * 3.0, rel=0.01)
 
 
+def test_limiar_tem_teto_e_nao_tranca_a_fala():
+    """A regressao que matou o serviço por 6 minutos.
+
+    Sob systemd, ruido durante os 600 ms de calibracao deu piso=0,1167 e limiar
+    0,35. Fala normal fica entre 0,05 e 0,3 de RMS, entao NADA passou o gate:
+    cada disparo da wake word terminava em "ninguem falou em 6s".
+    """
+    cfg = VadCfg(fator_acima_do_piso=3.0, piso_minimo=0.001, calibracao_ms=300,
+                 limiar_maximo=0.12, descartar_aquecimento=0)
+    det = DetectorFala(cfg, AudioCfg())
+    # ambiente barulhento como o medido sob systemd
+    det.calibrar(EntradaFalsa([bloco(0.1167, seed=i) for i in range(30)]))
+
+    assert det.limiar <= 0.12, "limiar acima do teto tranca a fala"
+    assert det.limiar_no_teto, "deveria sinalizar que bateu no teto"
+    # fala normal (RMS ~0,15) precisa passar
+    assert rms(bloco(0.15, seed=99)) > det.limiar
+
+
+def test_limiar_no_teto_e_falso_em_ambiente_normal():
+    cfg = VadCfg(fator_acima_do_piso=3.0, piso_minimo=0.001, calibracao_ms=300,
+                 limiar_maximo=0.12, descartar_aquecimento=0)
+    det = DetectorFala(cfg, AudioCfg())
+    det.calibrar(EntradaFalsa([bloco(0.01, seed=i) for i in range(30)]))
+    assert not det.limiar_no_teto
+    assert det.limiar == pytest.approx(0.03, rel=0.3)
+
+
+def test_calibracao_descarta_o_aquecimento_do_stream():
+    """Medido: a abertura do stream entrega 0,0 no primeiro bloco e um pico de
+    ~2x o ambiente no segundo."""
+    cfg = VadCfg(fator_acima_do_piso=3.0, piso_minimo=0.0001, calibracao_ms=300,
+                 descartar_aquecimento=3, limiar_maximo=1.0)
+    det = DetectorFala(cfg, AudioCfg())
+    lixo = [np.zeros(AMOSTRAS, np.int16), bloco(0.4, seed=1), bloco(0.4, seed=2)]
+    ambiente = [bloco(0.01, seed=10 + i) for i in range(20)]
+    det.calibrar(EntradaFalsa(lixo + ambiente))
+    # se o pico de 0,4 entrasse na conta, o piso passaria de 0,01
+    assert det.piso_ruido == pytest.approx(0.01, rel=0.3)
+
+
+def test_estalo_isolado_nao_infla_o_piso():
+    """Mediana, nao percentil 90: o p90 e MAIS sujeito a transiente que a mediana,
+    e o fator_acima_do_piso ja fornece a margem."""
+    cfg = VadCfg(fator_acima_do_piso=3.0, piso_minimo=0.0001, calibracao_ms=600,
+                 descartar_aquecimento=0, limiar_maximo=1.0)
+    det = DetectorFala(cfg, AudioCfg())
+    # 18 blocos de ambiente + 2 estalos altos (10% da amostra: exatamente onde o
+    # p90 se apoiava)
+    blocos = ([bloco(0.01, seed=i) for i in range(18)]
+              + [bloco(0.5, seed=100), bloco(0.5, seed=101)])
+    det.calibrar(EntradaFalsa(blocos))
+    assert det.piso_ruido == pytest.approx(0.01, rel=0.3)
+
+
+def test_calibracao_sem_audio_nao_explode():
+    cfg = VadCfg(piso_minimo=0.02, calibracao_ms=300)
+    det = DetectorFala(cfg, AudioCfg())
+    assert det.calibrar(EntradaFalsa([])) == 0.02
+    assert det.piso_ruido == 0.0
+
+
 def test_gate_rejeita_ruido_ambiente():
     """O caso que quebrava: ruido de fundo nao pode contar como fala."""
     cfg = VadCfg(fator_acima_do_piso=3.0, piso_minimo=0.001, calibracao_ms=300)

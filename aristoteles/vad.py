@@ -34,6 +34,9 @@ class DetectorFala:
         self.audio = audio
         self.piso_ruido: float = 0.0
         self.limiar: float = cfg.piso_minimo
+        # True quando o limiar bateu no teto -- sinal de que o ambiente estava
+        # ruidoso na calibracao e o gate pode estar mais permissivo que o ideal.
+        self.limiar_no_teto: bool = False
         # Por que a ultima gravacao devolveu None. Diagnosticar "a janela fechou
         # rapido" sem isto custou duas rodadas de investigacao.
         self.ultimo_motivo: str = ""
@@ -41,16 +44,29 @@ class DetectorFala:
     def calibrar(self, entrada: EntradaAudio) -> float:
         """Mede o piso de ruido do ambiente e define o limiar do gate.
 
-        Chame na inicializacao, com o usuario em silencio. Usa o percentil 90
-        para nao se deixar levar por um estalo isolado.
+        Chame na inicializacao, com o usuario em silencio.
+
+        Tres cuidados, todos vindos de falhas reais:
+
+        * **Descarta os primeiros blocos.** Medido, a abertura do stream entrega
+          lixo: 0,0 no primeiro bloco e um pico de ~2x o ambiente no segundo.
+        * **Mediana, nao percentil 90.** O p90 e *mais* sujeito a um estalo isolado
+          que a mediana -- o comentario anterior afirmava o contrario. E o fator
+          `fator_acima_do_piso` ja fornece a margem de seguranca; usar p90 embaixo
+          dele contava a margem duas vezes.
+        * **Teto no limiar.** Sem ele, ruido durante os 600 ms trancava a fala pela
+          sessao inteira. Medido sob systemd: piso=0,1167 gerou limiar 0,35 e
+          nenhuma pergunta passou o gate por 6 minutos.
         """
         n = max(4, int(self.cfg.calibracao_ms / self.audio.bloco_ms))
         entrada.limpar()
         niveis = []
-        for _ in range(n):
+        for i in range(n + self.cfg.descartar_aquecimento):
             bloco = entrada.ler(timeout=1.0)
             if bloco is None:
                 break
+            if i < self.cfg.descartar_aquecimento:
+                continue
             niveis.append(rms(bloco))
 
         if not niveis:
@@ -58,9 +74,10 @@ class DetectorFala:
             self.limiar = self.cfg.piso_minimo
             return self.limiar
 
-        self.piso_ruido = float(np.percentile(niveis, 90))
-        self.limiar = max(self.piso_ruido * self.cfg.fator_acima_do_piso,
-                          self.cfg.piso_minimo)
+        self.piso_ruido = float(np.median(niveis))
+        bruto = self.piso_ruido * self.cfg.fator_acima_do_piso
+        self.limiar = min(max(bruto, self.cfg.piso_minimo), self.cfg.limiar_maximo)
+        self.limiar_no_teto = bruto > self.cfg.limiar_maximo
         return self.limiar
 
     def eh_fala(self, bloco: np.ndarray) -> bool:

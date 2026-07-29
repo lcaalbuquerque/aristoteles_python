@@ -50,6 +50,17 @@ class VadCfg:
     calibracao_ms: int = 600      # duracao da medicao do piso de ruido na inicializacao
     fator_acima_do_piso: float = 3.0
     piso_minimo: float = 0.01     # limiar absoluto minimo (protege ambiente silencioso)
+    # Teto do limiar. Fala normal fica entre 0,05 e 0,3 de RMS, entao um gate acima
+    # de ~0,12 rejeita tudo. Sem este teto, ruido durante os 600 ms de calibracao
+    # trancava a fala pela sessao inteira: medido sob systemd, piso=0,1167 gerou
+    # limiar 0,35 e nenhuma pergunta passou por 6 minutos.
+    limiar_maximo: float = 0.12
+    # Blocos descartados no inicio da calibracao. Medido, os primeiros vem viciados
+    # pela abertura do stream: 0,0 no primeiro e um pico de ~2x no segundo.
+    descartar_aquecimento: int = 5
+    # Recalibra depois de N gravacoes seguidas em que ninguem falou. Num servico
+    # que fica dias ligado, um limiar medido errado uma vez nao pode ser definitivo.
+    recalibrar_apos_falhas: int = 2
 
 
 @dataclass

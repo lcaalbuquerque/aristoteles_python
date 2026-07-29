@@ -105,12 +105,20 @@ def _executar(args, cfg: Config, registro: Registro) -> int:
 
     try:
         with captura as entrada:
-            if not args.texto:
-                print("  calibrando piso de ruido (fique em silencio)...", end="", flush=True)
+            def calibrar(motivo: str = "") -> None:
+                rotulo = f"recalibrando ({motivo})" if motivo else "calibrando piso de ruido"
+                print(f"  {rotulo} (fique em silencio)...", end="", flush=True)
                 limiar = detector.calibrar(entrada)
                 print(f" piso={detector.piso_ruido:.4f} limiar={limiar:.4f}")
-                if detector.piso_ruido > 0.05:
+                if detector.limiar_no_teto:
+                    print(f"  AVISO: ambiente ruidoso -- limiar preso no teto de "
+                          f"{cfg.vad.limiar_maximo}. Baixe o ganho do microfone;")
+                    print("  sem isso o gate deixa passar ruido junto com a fala.")
+                elif detector.piso_ruido > 0.05:
                     print("  AVISO: ambiente ruidoso. Considere baixar o ganho do microfone.")
+
+            if not args.texto:
+                calibrar()
             def ouvir() -> str | None:
                 """Bipe, grava ate o silencio, transcreve. None = nao deu."""
                 beep(880, dispositivo=cfg.audio.dispositivo_saida)
@@ -134,6 +142,10 @@ def _executar(args, cfg: Config, registro: Registro) -> int:
             # Preenchido quando um barge-in ja capturou a proxima pergunta: nesse
             # caso nao voltamos ao ocioso, porque o usuario acabou de falar.
             pendente: str | None = None
+            # "Ninguem falou" seguidas vezes quase sempre significa gate errado, e
+            # nao usuario mudo: sob systemd um piso medido num instante ruidoso
+            # trancou a fala por 6 minutos. Recalibrar cura sem reiniciar.
+            falhas_seguidas = 0
             while True:
                 # --- OCIOSO -> DESPERTO -> OUVINDO ---
                 if pendente is not None:
@@ -154,7 +166,15 @@ def _executar(args, cfg: Config, registro: Registro) -> int:
                     if not gatilho.aguardar(entrada):
                         break
                     if (pergunta := ouvir()) is None:
+                        if "ninguem falou" in detector.ultimo_motivo:
+                            falhas_seguidas += 1
+                            if falhas_seguidas >= cfg.vad.recalibrar_apos_falhas:
+                                calibrar(f"{falhas_seguidas} tentativas sem fala")
+                                falhas_seguidas = 0
+                        else:
+                            falhas_seguidas = 0
                         continue
+                    falhas_seguidas = 0
 
                 # --- PENSANDO -> FALANDO ---
                 saida.retomar()

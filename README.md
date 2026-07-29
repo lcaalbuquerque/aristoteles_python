@@ -302,6 +302,34 @@ Se **gravar sem parar**, suba para 4,0 ou baixe o ganho do microfone. O gate pod
 comer o início de uma fala muito suave — é o que o buffer de pré-gravação compensa
 no modo wake word.
 
+### Quando o gate tranca a fala inteira
+
+Sintoma: a wake word dispara, mas toda pergunta termina em
+`[nao ouvi nada: ninguem falou em 6s]`. Aconteceu de verdade sob systemd —
+6 minutos sem conseguir fazer uma pergunta:
+
+```
+calibrando piso de ruido... piso=0.1167 limiar=0.3500
+```
+
+Fala normal fica entre 0,05 e 0,3 de RMS. Com o limiar em **0,35, nada passa nunca**.
+A causa era de projeto: uma única medição de 600 ms na inicialização fixava o limiar
+para toda a sessão — e como serviço o app fica dias ligado. Três correções:
+
+| Antes | Agora |
+|---|---|
+| sem teto no limiar | `vad.limiar_maximo` (0,12) — acima disso o gate rejeitaria fala |
+| percentil 90 do ruído | **mediana** — o p90 é *mais* sujeito a um estalo isolado, e o `fator_acima_do_piso` já dá a margem |
+| media desde o 1º bloco | descarta `vad.descartar_aquecimento` blocos — medido, a abertura do stream dá 0,0 no primeiro e um pico de ~2× no segundo |
+
+E se ainda assim o gate estiver errado, ele **se conserta**: depois de
+`vad.recalibrar_apos_falhas` gravações seguidas sem fala, recalibra sozinho, sem
+precisar reiniciar o serviço.
+
+Quando o limiar bate no teto, o aviso é explícito — nesse caso o `webrtcvad` fica
+sozinho no trabalho e volta a valer a tabela de agressividade acima, então **baixe o
+ganho do microfone** de verdade.
+
 ### A janela de escuta parecia instantânea
 
 Sintoma: você diz "Aristóteles", ouve o bipe, e antes de conseguir formular a

@@ -27,6 +27,13 @@ vad:
   calibracao_ms: 600
   fator_acima_do_piso: 3.0   # fala precisa estar 3x acima do piso de ruido
   piso_minimo: 0.01          # limiar absoluto minimo
+  # Teto do limiar. Fala normal fica entre 0,05 e 0,3 de RMS, entao um gate acima
+  # de ~0,12 rejeita tudo. Sem teto, ruido nos 600 ms da calibracao trancava a
+  # fala pela sessao inteira -- medido sob systemd: piso 0,1167 -> limiar 0,35 e
+  # nenhuma pergunta passou por 6 minutos.
+  limiar_maximo: 0.12
+  descartar_aquecimento: 5   # blocos iniciais viciados pela abertura do stream
+  recalibrar_apos_falhas: 2  # recalibra depois de N gravacoes sem fala
 
 stt:
   backend: cpu               # "cpu" (faster-whisper) | "vulkan" (whisper.cpp na Radeon)
