@@ -333,6 +333,122 @@ def test_erro_nao_de_rede_nao_reconecta(monkeypatch):
     assert "chave" in dito[-1].lower()
 
 
+def _erro_no_stream(tipo: str = "overloaded_error", status: int = 200):
+    """Reproduz o erro que chega DENTRO do stream.
+
+    O SDK monta a excecao pelo status HTTP, e num erro no meio do stream o status
+    e 200 (cabecalhos ja enviados). Por isso nao vira OverloadedError, e sim um
+    APIStatusError cru -- e o max_retries do SDK nao ajuda, porque para ele a
+    requisicao funcionou.
+    """
+    corpo = {"type": "error", "error": {"type": tipo, "message": "Overloaded"},
+             "request_id": "req_teste"}
+    resp = httpx.Response(status, request=httpx.Request("POST", "http://x"),
+                          json=corpo)
+    return anthropic.APIStatusError(f"{corpo}", response=resp, body=corpo)
+
+
+def test_overloaded_no_stream_e_reconhecido_como_transitorio():
+    from aristoteles.cerebro import eh_transitorio
+
+    e = _erro_no_stream()
+    assert isinstance(e, anthropic.APIStatusError)
+    assert e.status_code == 200, "o erro no stream vem com status 200"
+    assert not isinstance(e, anthropic.OverloadedError), \
+        "por isso nao da para capturar OverloadedError"
+    assert eh_transitorio(e)
+
+
+def test_overloaded_no_stream_e_retentado(monkeypatch, capsys):
+    """A regressao relatada: o app desistia na primeira sobrecarga.
+
+    Ela caia no `except APIStatusError` genérico, que nao retentava -- e como o
+    SDK tambem nao pode retentar (para ele o pedido deu 200), a pergunta do
+    usuario era perdida por uma falha que passa em segundos.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=2, espera_reconexao_s=0.0))
+
+    chamadas = {"n": 0}
+
+    def transmitir():
+        chamadas["n"] += 1
+        if chamadas["n"] == 1:
+            raise _erro_no_stream()
+        yield "Deu na segunda."
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    assert list(c.responder("oi")) == ["Deu na segunda."]
+    assert chamadas["n"] == 2
+    assert "reconectando" in capsys.readouterr().out
+
+
+def test_overloaded_persistente_avisa_que_e_do_servidor(monkeypatch):
+    """Mensagem distinta do erro genérico: o problema e do outro lado e passa."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=1, espera_reconexao_s=0.0))
+
+    def transmitir():
+        raise _erro_no_stream()
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    dito = list(c.responder("oi"))
+    assert "sobrecarregado" in dito[-1].lower()
+    assert list(c._historico) == []
+
+
+def test_erro_permanente_nao_e_retentado(monkeypatch):
+    """400 nao melhora esperando; insistir so somaria silencio."""
+    from aristoteles.cerebro import eh_transitorio
+
+    ruim = anthropic.BadRequestError(
+        "invalido", response=httpx.Response(
+            400, request=httpx.Request("POST", "http://x"), json={}), body=None)
+    assert not eh_transitorio(ruim)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=3, espera_reconexao_s=0.0))
+    chamadas = {"n": 0}
+
+    def transmitir():
+        chamadas["n"] += 1
+        raise ruim
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    list(c.responder("oi"))
+    assert chamadas["n"] == 1
+
+
+def test_status_5xx_e_transitorio():
+    from aristoteles.cerebro import eh_transitorio
+
+    for status in (500, 502, 503, 529):
+        e = anthropic.APIStatusError(
+            "erro", response=httpx.Response(
+                status, request=httpx.Request("POST", "http://x"), json={}),
+            body=None)
+        assert eh_transitorio(e), f"status {status} deveria ser transitorio"
+
+
+def test_overloaded_depois_de_falar_nao_retenta(monkeypatch):
+    """O alto-falante nao tem desfazer."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-teste")
+    c = Cerebro(LlmCfg(reconexoes=3, espera_reconexao_s=0.0))
+    chamadas = {"n": 0}
+
+    def transmitir():
+        chamadas["n"] += 1
+        yield "Primeira frase."
+        raise _erro_no_stream()
+
+    monkeypatch.setattr(c, "_transmitir", transmitir)
+    dito = list(c.responder("oi"))
+    assert chamadas["n"] == 1
+    assert dito[0] == "Primeira frase."
+
+
 def test_erro_nao_deixa_pergunta_orfa_no_historico(monkeypatch):
     """Turno sem resposta na frente do historico faria a proxima chamada dar 400."""
     erro = anthropic.APITimeoutError(request=httpx.Request("POST", "http://x"))

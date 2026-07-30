@@ -109,12 +109,32 @@ não são, todas descobertas medindo:
    podia não vê-la antes do `retomar()` e voltava a tocar o bloco descartado — a
    fala interrompida ressuscitava. A geração é monotônica.
 
-**Reconexão.** O SDK já retenta, mas só antes do stream começar; se a conexão cai no
+**Reconexão.** O SDK já retenta, mas só antes do stream começar; se a falha vem no
 meio, ele não remonta a chamada. O [cerebro.py](aristoteles/cerebro.py) reemite o
 turno inteiro com espera dobrando (`llm.reconexoes`, `llm.espera_reconexao_s`) —
 **mas apenas enquanto nada tiver sido falado**. Depois da primeira frase no
 alto-falante não há desfazer, e repetir a resposta do zero seria pior que admitir o
 erro.
+
+O caso que mais importa aqui é o **`overloaded_error` dentro do stream**, e ele é
+sutil:
+
+```
+[cerebro] erro da API (200): {'type': 'error', 'error': {'type': 'overloaded_error', ...
+```
+
+Note o **status 200**. O SDK constrói a exceção a partir do código HTTP, e num erro
+no meio do stream os cabeçalhos já foram enviados — então o status é 200. Duas
+consequências: não vira `anthropic.OverloadedError` (capturar essa classe não
+funcionaria), e o `max_retries` do SDK não ajuda, porque para ele a requisição
+*funcionou*. **Falha transitória de servidor no meio do stream só pode ser retentada
+pela aplicação.**
+
+Por isso `eh_transitorio()` decide pelo `error.type` do corpo, não pelo status.
+Transitórios: `overloaded_error`, `api_error` e status 500/502/503/504/529.
+Permanentes (não retenta, porque não melhora esperando): 400, 401, 403, 404, 413,
+422. O 429 é caso à parte — o SDK já o retentou com backoff antes de levantar, então
+insistir só somaria silêncio.
 
 **Serviço.**
 

@@ -65,6 +65,45 @@ def _credencial_limpa(arquivo: Path | None = None) -> dict[str, str]:
     return {}
 
 
+TIPOS_TRANSITORIOS = frozenset({"overloaded_error", "api_error"})
+STATUS_TRANSITORIOS = frozenset({500, 502, 503, 504, 529})
+
+
+def _tipo_do_erro(e: anthropic.APIStatusError) -> str:
+    """Le `error.type` do corpo da resposta, se houver."""
+    corpo = getattr(e, "body", None)
+    if isinstance(corpo, dict):
+        erro = corpo.get("error")
+        if isinstance(erro, dict):
+            return str(erro.get("type") or "")
+    return ""
+
+
+def eh_transitorio(e: Exception) -> bool:
+    """Vale a pena tentar de novo?
+
+    O caso que motivou isto: `overloaded_error` da Anthropic **dentro do stream**.
+    O SDK monta a excecao a partir do status HTTP, e num erro no meio do stream o
+    status e 200 -- os cabecalhos ja foram enviados. Resultado: nao vira
+    `OverloadedError`, vira um `APIStatusError` cru com status_code 200, e nem o
+    `max_retries` do SDK ajuda, porque para ele a requisicao *funcionou*.
+
+    Ou seja, falha transitoria de servidor no meio do stream so pode ser retentada
+    aqui. Identificamos pelo `error.type` do corpo, nao pelo status.
+    """
+    if isinstance(e, (anthropic.APITimeoutError, anthropic.APIConnectionError)):
+        return True
+    if isinstance(e, (anthropic.AuthenticationError, anthropic.PermissionDeniedError,
+                      anthropic.BadRequestError, anthropic.NotFoundError,
+                      anthropic.RequestTooLargeError,
+                      anthropic.UnprocessableEntityError)):
+        return False  # nao melhora esperando
+    if isinstance(e, anthropic.APIStatusError):
+        return (_tipo_do_erro(e) in TIPOS_TRANSITORIOS
+                or e.status_code in STATUS_TRANSITORIOS)
+    return False
+
+
 def aparar_historico(msgs: list[dict], max_msgs: int) -> list[dict]:
     """Corta a janela pela esquerda, sempre parando num turno do usuario.
 
@@ -158,39 +197,48 @@ class Cerebro:
                     falou_algo = True
                     yield frase
                 return
-            except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
-                ultima = tentativa >= self.cfg.reconexoes
-                if falou_algo or ultima:
-                    yield from self._explicar(e)
-                    return
-                espera = self.cfg.espera_reconexao_s * (2 ** tentativa)
-                print(f"[cerebro] {type(e).__name__}: {e.__cause__!r}; "
-                      f"reconectando em {espera:.1f}s "
-                      f"({tentativa + 1}/{self.cfg.reconexoes})")
-                time.sleep(espera)
-            except anthropic.RateLimitError:
-                self._historico.pop()
-                yield "Atingi o limite de uso. Tente de novo em instantes."
-                return
+            # AuthenticationError e RateLimitError primeiro: sao subclasses de
+            # APIStatusError e nao devem cair no ramo de retentativa.
             except anthropic.AuthenticationError:
                 self._historico.pop()
                 print("[cerebro] credencial invalida ou revogada. Verifique ANTHROPIC_API_KEY.")
                 yield "Minha chave de acesso foi recusada."
                 return
-            except anthropic.APIStatusError as e:
+            except anthropic.RateLimitError:
+                # O SDK ja retentou o 429 com backoff antes de levantar; insistir
+                # aqui so somaria silencio.
                 self._historico.pop()
-                print(f"[cerebro] erro da API ({e.status_code}): {e.message}")
-                yield "Tive um problema para pensar agora."
+                yield "Atingi o limite de uso. Tente de novo em instantes."
                 return
+            except (anthropic.APIConnectionError, anthropic.APIStatusError) as e:
+                ultima = tentativa >= self.cfg.reconexoes
+                if not eh_transitorio(e) or falou_algo or ultima:
+                    yield from self._explicar(e)
+                    return
+                espera = self.cfg.espera_reconexao_s * (2 ** tentativa)
+                detalhe = _tipo_do_erro(e) or repr(getattr(e, "__cause__", None))
+                print(f"[cerebro] {type(e).__name__} ({detalhe}); "
+                      f"reconectando em {espera:.1f}s "
+                      f"({tentativa + 1}/{self.cfg.reconexoes})")
+                time.sleep(espera)
 
     def _explicar(self, e: Exception) -> Iterator[str]:
-        """Mensagem falada para uma falha de rede que nao deu para contornar."""
+        """Mensagem falada para uma falha que nao deu para contornar."""
         self._historico.pop()
         if isinstance(e, anthropic.APITimeoutError):
             print(f"[cerebro] timeout ({type(e).__name__}): "
                   f"connect={self.cfg.timeout_conexao_s}s "
                   f"read={self.cfg.timeout_leitura_s}s; causa: {e.__cause__!r}")
             yield "Demorei demais para responder. Pergunte de novo."
+        elif isinstance(e, anthropic.APIStatusError):
+            tipo = _tipo_do_erro(e)
+            print(f"[cerebro] erro da API (status {e.status_code}, tipo "
+                  f"{tipo or 'desconhecido'}): {e.message}")
+            if tipo == "overloaded_error":
+                # Distingue do erro genérico: o problema e do outro lado e passa.
+                yield "O servidor está sobrecarregado. Tente de novo em instantes."
+            else:
+                yield "Tive um problema para pensar agora."
         else:
             print(f"[cerebro] falha de conexao ({type(e).__name__}): {e.__cause__!r}")
             yield "Nao consegui falar com o servidor agora."
