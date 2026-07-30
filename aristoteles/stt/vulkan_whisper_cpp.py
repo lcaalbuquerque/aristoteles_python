@@ -8,7 +8,7 @@ instalado no sistema.
 Falamos com o `whisper-server` por HTTP em vez de invocar o binario a cada frase:
 assim o modelo fica residente e nao se paga o carregamento (1-2 s) toda vez.
 
-Suba o servidor com: ./scripts/03_servidor_whisper.sh
+Suba o servidor com: ./scripts/04_servidor_whisper.sh
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ class WhisperCppVulkan:
         except requests.RequestException as e:
             raise RuntimeError(
                 f"whisper-server nao respondeu em {self.cfg.servidor_url}.\n"
-                "Suba com: ./scripts/03_servidor_whisper.sh  "
+                "Suba com: ./scripts/04_servidor_whisper.sh  "
                 "(ou troque stt.backend para 'cpu' no config.yaml)"
             ) from e
 
